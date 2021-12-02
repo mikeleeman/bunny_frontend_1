@@ -10,6 +10,16 @@
 		<br>
 		No. Of Tokens To Mint: {{noOfTokensToMint}}
 		<br>
+		User Balance: {{userBalanceText}}
+		<br>
+		Token Ids: {{tokenIds}}
+		<br>
+		Token URIs: {{tokenUris}}
+		<br>
+		Token Metadata: {{tokenMetadata}}
+		<br>
+		Mint Status: {{buyStatusText}}
+		<br>
 		<br>
 		<b-form-group>
 			<label>Level Selection:</label>
@@ -17,14 +27,13 @@
 		</b-form-group>
 		<b-form-group>
 			<label>Currency Selection:</label>
-			<b-form-select v-model="addressOfCurrencySelected" :options="currencyOptions"></b-form-select>
+			<b-form-select @change="populateUserBalanceText()" v-model="addressOfCurrencySelected" :options="currencyOptions"></b-form-select>
 		</b-form-group>
 		<b-form-group>
 			<label>No Of Tokens To Mint:</label>
 			<input class="form-control" v-model="noOfTokensToMint" type="number" :step="1" :min="1" :max="10"/>
 		</b-form-group>
 		<b-form-group>
-			<b-button :disabled="isReady" @click="approvePurchase()">Approve</b-button>
 			<b-button :disabled="isReady" @click="buy()">Buy</b-button>
 		</b-form-group>
 	</div>
@@ -35,6 +44,7 @@ import Web3 from 'web3';
 import Web3Modal from "web3modal";
 import { getProviderInfo } from "web3modal"
 import WalletConnectProvider from "@walletconnect/web3-provider";
+import axios from "axios";
 export default {
 	components:{},
 	data(){
@@ -42,10 +52,15 @@ export default {
 			web3: null,
 			bunnyGirlContract: null,
 			accounts: [],
-			noOfTokensToMint: 0,
+			noOfTokensToMint: 1,
 			addressOfCurrencySelected: null,
 			levelSelected: null,
 			isReady:false,
+			userBalanceText: 0,
+			tokenIds: [],
+			tokenUris: [],
+			tokenMetadata: [],
+			buyStatusText: '',
 
 			bunnyGirlData:{
 				levelMultiplier: [],
@@ -64,41 +79,100 @@ export default {
 		}
 	},
 	methods:{
-		
-		approvePurchase(){
-			const bunnyGirlContract = this.bunnyGirlContract;
-			const fee = this.calculateFee();
-			bunnyGirlContract.methods.approve(this.$settings.BunnyGirlNftAddress, fee).
-			send({from: this.accounts[0]})
-			.on('transactionHash', (hash)=>{
-				//display tx url for user to check
-			}).on('receipt', (receipt)=>{
-				alert('Approve Success');
-				console.log(receipt);
-			}).on('error', (err, receipt)=>{
-				alert('Approve Failed, Please Try Again');
-				console.error(err);
-				console.error(receipt);
-			});
+		async populateUserBalanceText(){
+			const web3 = this.web3;
+			const BN = web3.utils.BN;
+			if(this.addressOfCurrencySelected === '0x0000000000000000000000000000000000000000'){
+				//get native token amount
+				const userBalance = new BN(await web3.eth.getBalance(this.accounts[0]));
+				//this.userBalanceText = web3.utils.fromWei(userBalance, 'ether');
+				this.userBalanceText = userBalance.toString();
+			}
 		},
+		
 
 		async buy(){
 			const web3 = this.web3;
 			const BN = web3.utils.BN;
 			const fee = this.calculateFee();
 			console.log('fee: ',fee.toString());
-			if(await this.isEnoughFunds(new BN('300000000000000000'))){
-				console.log('yea');
+			if(await this.isEnoughFunds(fee)){
+				console.log('buy');
+				await this.mintBunnyGirl();
+			}else{
+				alert('not enough fee');
 			}
 		},
 
 		calculateFee(){
 			const web3 = this.web3;
 			const BN = web3.utils.BN;
-			const multiplier = this.bunnyGirlData.levelMultiplier[this.levelSelected];//can be string or number
+			const multiplier = new BN(this.bunnyGirlData.levelMultiplier[this.levelSelected-1]);
 			const baseFee = new BN(this.bunnyGirlData.mintFee);
-			const fee = baseFee.mul(multiplier);
-			return fee;
+			baseFee.imul(multiplier);
+			baseFee.imuln(parseInt(this.noOfTokensToMint));
+			baseFee.idivn(10000);
+			console.log('calculated fee: ', baseFee.toString());
+			return baseFee;
+		},
+
+		async mintBunnyGirl(){
+			const bunnyGirlContract = this.bunnyGirlContract;
+			console.log(this.noOfTokensToMint, this.addressOfCurrencySelected, this.levelSelected);
+			const fee = this.calculateFee();
+
+			bunnyGirlContract.methods.mintBunnyGirl(parseInt(this.noOfTokensToMint), this.addressOfCurrencySelected, parseInt(this.levelSelected))
+			.send({from: this.accounts[0], gas: "7000000", value: fee})
+			.on('transactionHash', (hash)=>{
+				this.buyStatusText = 'Pending Receipt...';
+				//display tx url for user to check
+			}).once('receipt', async (receipt)=>{
+				console.log('mintBunnyGirl receipt: ',receipt);
+				alert('Successfully purchased token');
+				this.buyStatusText = 'Success';
+				this.extractTokenIds(receipt);
+				await this.populateTokenUris();
+				await this.populateTokenMetadata();
+			}).on('error', (err, receipt)=>{
+				this.buyStatusText = 'Error';
+				console.error('mintBunnyGirl receipt error',);
+				console.error(err, receipt);
+				alert('something went wrong');
+			});
+		},
+
+		extractTokenIds(receipt){
+			let events = [];
+			if(Array.isArray(receipt.events.Transfer)){
+				events = receipt.events.Transfer;
+			}else{
+				events.push(receipt.events.Transfer);
+			}
+
+			console.log('events: ', events);
+
+			events.forEach((item)=>{
+				this.tokenIds.push(item.raw.topics[3]);
+			});
+		},
+
+		async populateTokenUris(){
+			const bunnyGirlContract = this.bunnyGirlContract;
+			var i=0;
+			while(i<this.tokenIds.length){
+				const id = this.tokenIds[i];
+				this.tokenUris.push(await bunnyGirlContract.methods.tokenURI(id).call());
+				i++;
+			}
+		},
+
+		async populateTokenMetadata(){
+			var i=0;
+			while(i<this.tokenUris.length){
+				const uri = this.tokenUris[i];
+				this.tokenMetadata.push(await axios.get(uri));
+				i++;
+			}
 		},
 		
 		async initContractAndPopulateBunnyGirlData(){
@@ -108,6 +182,8 @@ export default {
 			const bunnyGirlContract = this.bunnyGirlContract;
 			try{
 				this.bunnyGirlData.levelMultiplier.push(await bunnyGirlContract.methods.levelMultiplier(1).call());
+				this.bunnyGirlData.levelMultiplier.push(await bunnyGirlContract.methods.levelMultiplier(2).call());
+				this.bunnyGirlData.levelMultiplier.push(await bunnyGirlContract.methods.levelMultiplier(3).call());
 				console.log('levelMultiplier: ', this.bunnyGirlData.levelMultiplier);
 				
 				const mintFee = await bunnyGirlContract.methods.mintFee('0x0000000000000000000000000000000000000000').call();
@@ -118,27 +194,19 @@ export default {
 			}
 		},
 
-		async mintBunnyGirl(){
-			const bunnyGirlContract = this.bunnyGirlContract;
-			bunnyGirlContract.methods.mintBunnyGirl(this.noOfTokensToMint, this.addressOfCurrencySelected, this.levelSelected)
-			.on('transactionHash', (hash)=>{
-				//display tx url for user to check
-			}).on('receipt', (receipt)=>{
-				alert('Successfully purchased token');
-			}).on('error', (err, receipt)=>{
-				console.error(err);
-				console.error(receipt);
-				alert('something went wrong');
-			});
-		},
-
 		async isEnoughFunds(fee){
 			const web3 = this.web3;
 			const BN = web3.utils.BN;
-			const userBalance = new BN(await web3.eth.getBalance(this.accounts[0]));
+			let userBalance = new BN('0');
+			if(this.addressOfCurrencySelected === '0x0000000000000000000000000000000000000000'){
+				//get native token amount
+				userBalance = new BN(await web3.eth.getBalance(this.accounts[0]));
+				this.userBalanceText = userBalance.toString();
+				//this.userBalanceText = web3.utils.fromWei(userBalance, 'ether');
+			}
 			console.log(userBalance.toString());
 			//small amount of wei as margin
-			const margin = new BN('1000000');
+			const margin = new BN('100000000');
 			userBalance.iadd(margin);
 			if(fee.gt(userBalance)){
 				alert('not enough funds, please add more funds');
@@ -264,6 +332,31 @@ export default {
 			});
 
 		},
+
+		/*async approvePurchase(){
+			const web3 = this.web3;
+			const bunnyGirlContract = this.bunnyGirlContract;
+			const fee = this.calculateFee();
+
+			bunnyGirlContract.methods.approve(this.$settings.BunnyGirlNftAddress, fee).
+			send({from: this.accounts[0]})
+			.on('transactionHash', (hash)=>{
+				//display tx url for user to check
+			}).on('receipt', (receipt)=>{
+				alert('Approve Success');
+				console.log(receipt);
+			}).on('error', (err, receipt)=>{
+				if(err.hasOwnProperty('code')){
+					if(err.code === 4001){
+						alert('User rejected approval');
+						return;
+					}
+				}
+				alert('Approve Failed, Please Try Again');
+				console.error(err);
+				console.error(receipt);
+			});
+		},*/
 	},
 	//
 	async mounted(){
