@@ -108,6 +108,8 @@ export default {
 			const bunnyGirlContract = this.bunnyGirlContract;
 			try{
 				this.bunnyGirlData.levelMultiplier.push(await bunnyGirlContract.methods.levelMultiplier(1).call());
+				console.log('levelMultiplier: ', this.bunnyGirlData.levelMultiplier);
+				
 				const mintFee = await bunnyGirlContract.methods.mintFee('0x0000000000000000000000000000000000000000').call();
 				console.log('mintFee: ', mintFee);
 				this.bunnyGirlData.mintFee = mintFee;
