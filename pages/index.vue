@@ -263,6 +263,7 @@ export default {
 
 		},
 	},
+	//
 	async mounted(){
 		try{
 			await this.initWeb3Modal();
