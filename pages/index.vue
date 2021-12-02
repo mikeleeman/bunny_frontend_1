@@ -121,7 +121,7 @@ export default {
 			console.log(this.noOfTokensToMint, this.addressOfCurrencySelected, this.levelSelected);
 			const fee = this.calculateFee();
 
-			bunnyGirlContract.methods.mintBunnyGirl(parseInt(this.noOfTokensToMint), this.addressOfCurrencySelected, parseInt(this.levelSelected))
+			bunnyGirlContract.methods.mintBunnyGirl(this.noOfTokensToMint, this.addressOfCurrencySelected, this.levelSelected)
 			.send({from: this.accounts[0], gas: "7000000", value: fee})
 			.on('transactionHash', (hash)=>{
 				this.buyStatusText = 'Pending Receipt...';
@@ -130,6 +130,7 @@ export default {
 				console.log('mintBunnyGirl receipt: ',receipt);
 				alert('Successfully purchased token');
 				this.buyStatusText = 'Success';
+				
 				this.extractTokenIds(receipt);
 				await this.populateTokenUris();
 				await this.populateTokenMetadata();
