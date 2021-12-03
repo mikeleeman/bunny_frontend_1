@@ -27,14 +27,17 @@
 		</b-form-group>
 		<b-form-group>
 			<label>Currency Selection:</label>
-			<b-form-select @change="populateUserBalanceText()" v-model="addressOfCurrencySelected" :options="currencyOptions"></b-form-select>
+			<b-form-select @change="onChangeCurrency()" v-model="addressOfCurrencySelected" :options="currencyOptions"></b-form-select>
 		</b-form-group>
 		<b-form-group>
 			<label>No Of Tokens To Mint:</label>
 			<input class="form-control" v-model="noOfTokensToMint" type="number" :step="1" :min="1" :max="10"/>
 		</b-form-group>
 		<b-form-group>
-			<b-button :disabled="isReady" @click="buy()">Buy</b-button>
+			<b-button v-if="addressOfCurrencySelected!='0x0000000000000000000000000000000000000000' && addressOfCurrencySelected!=null" 
+				@click="approveErc20Spending()">Approve</b-button>
+			<b-button :disabled="!isErc20Approved && addressOfCurrencySelected!='0x0000000000000000000000000000000000000000'"
+				@click="buy()">Buy</b-button>
 		</b-form-group>
 	</div>
 </template>
@@ -50,21 +53,24 @@ export default {
 	data(){
 		return {
 			web3: null,
-			bunnyGirlContract: null,
+			bunnyGirlLootBox3: null,
+			bunnyGirlNftTokenV2: null,
+
 			accounts: [],
 			noOfTokensToMint: 1,
 			addressOfCurrencySelected: null,
 			levelSelected: null,
-			isReady:false,
 			userBalanceText: 0,
 			tokenIds: [],
 			tokenUris: [],
 			tokenMetadata: [],
 			buyStatusText: '',
+			isErc20Approved: false,
 
 			bunnyGirlData:{
 				levelMultiplier: [],
 				mintFee: '0',
+				discount: null,
 			},
 			levelOptions: [
 				{ value: null, text: 'Please select an option' },
@@ -75,22 +81,11 @@ export default {
 			currencyOptions: [
 				{ value: null, text: 'Please select an option' },
 				{ value: '0x0000000000000000000000000000000000000000', text: 'BNB' },
+				{ value: this.$settings.BunnyGirlNftTokenV2Address, text: 'BGNT' },
 			],
 		}
 	},
 	methods:{
-		async populateUserBalanceText(){
-			const web3 = this.web3;
-			const BN = web3.utils.BN;
-			if(this.addressOfCurrencySelected === '0x0000000000000000000000000000000000000000'){
-				//get native token amount
-				const userBalance = new BN(await web3.eth.getBalance(this.accounts[0]));
-				//this.userBalanceText = web3.utils.fromWei(userBalance, 'ether');
-				this.userBalanceText = userBalance.toString();
-			}
-		},
-		
-
 		async buy(){
 			const web3 = this.web3;
 			const BN = web3.utils.BN;
@@ -104,25 +99,62 @@ export default {
 			}
 		},
 
+		async onChangeCurrency(){
+			const bunnyGirlLootBox3 = this.bunnyGirlLootBox3;
+			const bunnyGirlNftTokenV2 = this.bunnyGirlNftTokenV2;
+			const web3 = this.web3;
+			const BN = web3.utils.BN;
+
+			const mintFee = await bunnyGirlLootBox3.methods.mintFee(this.addressOfCurrencySelected).call();
+			this.bunnyGirlData.mintFee = mintFee;
+			console.log('mintFee: ', mintFee);
+			
+			if(this.addressOfCurrencySelected === '0x0000000000000000000000000000000000000000'){
+				//get native token amount
+				const userBalance = new BN(await web3.eth.getBalance(this.accounts[0]));
+				//this.userBalanceText = web3.utils.fromWei(userBalance, 'ether');
+				this.userBalanceText = userBalance.toString();
+			}else{
+				const userBalance = await bunnyGirlNftTokenV2.methods.balanceOf(this.accounts[0]).call();
+				this.userBalanceText = userBalance.toString();
+			}
+		},
+
 		calculateFee(){
 			const web3 = this.web3;
 			const BN = web3.utils.BN;
 			const multiplier = new BN(this.bunnyGirlData.levelMultiplier[this.levelSelected-1]);
-			const baseFee = new BN(this.bunnyGirlData.mintFee);
+			let baseFee = new BN(this.bunnyGirlData.mintFee);
+			const discount = parseInt(this.bunnyGirlData.discount);
 			baseFee.imul(multiplier);
 			baseFee.imuln(parseInt(this.noOfTokensToMint));
-			baseFee.idivn(10000);
+			baseFee.imuln(discount);
+			baseFee = baseFee.div(new BN('100000000'));
 			console.log('calculated fee: ', baseFee.toString());
 			return baseFee;
 		},
 
 		async mintBunnyGirl(){
-			const bunnyGirlContract = this.bunnyGirlContract;
+			const bunnyGirlLootBox3 = this.bunnyGirlLootBox3;
 			console.log(this.noOfTokensToMint, this.addressOfCurrencySelected, this.levelSelected);
 			const fee = this.calculateFee();
 
-			bunnyGirlContract.methods.mintBunnyGirl(this.noOfTokensToMint, this.addressOfCurrencySelected, this.levelSelected)
-			.send({from: this.accounts[0], gas: "7000000", value: fee})
+			let type = '';
+			if(this.addressOfCurrencySelected === '0x0000000000000000000000000000000000000000'){
+				type = 'native';
+			}else{
+				type = 'erc20';
+			}
+
+			let sendData = null;
+			if(type==='native'){
+				sendData ={from: this.accounts[0], value: fee};
+			}else if(type==='erc20'){
+				sendData ={from: this.accounts[0]};
+			}
+
+			bunnyGirlLootBox3.methods.buy(this.noOfTokensToMint, this.addressOfCurrencySelected, this.levelSelected)
+			.send(sendData)
 			.on('transactionHash', (hash)=>{
 				this.buyStatusText = 'Pending Receipt...';
 				//display tx url for user to check
@@ -131,9 +163,9 @@ export default {
 				alert('Successfully purchased token');
 				this.buyStatusText = 'Success';
 				
-				this.extractTokenIds(receipt);
-				await this.populateTokenUris();
-				await this.populateTokenMetadata();
+				//this.extractTokenIds(receipt);
+				//await this.populateTokenUris();
+				//await this.populateTokenMetadata();
 			}).on('error', (err, receipt)=>{
 				this.buyStatusText = 'Error';
 				console.error('mintBunnyGirl receipt error',);
@@ -158,11 +190,11 @@ export default {
 		},
 
 		async populateTokenUris(){
-			const bunnyGirlContract = this.bunnyGirlContract;
+			const bunnyGirlLootBox3 = this.bunnyGirlLootBox3;
 			var i=0;
 			while(i<this.tokenIds.length){
 				const id = this.tokenIds[i];
-				this.tokenUris.push(await bunnyGirlContract.methods.tokenURI(id).call());
+				this.tokenUris.push(await bunnyGirlLootBox3.methods.tokenURI(id).call());
 				i++;
 			}
 		},
@@ -177,25 +209,27 @@ export default {
 		},
 		
 		async initContractAndPopulateBunnyGirlData(){
-			console.log('BunnyGirlNftAddress: ',this.$settings.BunnyGirlNftAddress);
+			console.log('BunnyGirlNftAddress: ',this.$settings.BunnyGirlLootBox3Address);
 			const web3 = this.web3;
-			this.bunnyGirlContract = new web3.eth.Contract(this.$settings.BunnyGirlNftAbi, this.$settings.BunnyGirlNftAddress);
-			const bunnyGirlContract = this.bunnyGirlContract;
+			this.bunnyGirlLootBox3 = new web3.eth.Contract(this.$settings.BunnyGirlLootBox3Abi, this.$settings.BunnyGirlLootBox3Address);
+			const bunnyGirlLootBox3 = this.bunnyGirlLootBox3;
 			try{
-				this.bunnyGirlData.levelMultiplier.push(await bunnyGirlContract.methods.levelMultiplier(1).call());
-				this.bunnyGirlData.levelMultiplier.push(await bunnyGirlContract.methods.levelMultiplier(2).call());
-				this.bunnyGirlData.levelMultiplier.push(await bunnyGirlContract.methods.levelMultiplier(3).call());
+				this.bunnyGirlData.levelMultiplier.push(await bunnyGirlLootBox3.methods.levelMultiplier(1).call());
+				this.bunnyGirlData.levelMultiplier.push(await bunnyGirlLootBox3.methods.levelMultiplier(2).call());
+				this.bunnyGirlData.levelMultiplier.push(await bunnyGirlLootBox3.methods.levelMultiplier(3).call());
 				console.log('levelMultiplier: ', this.bunnyGirlData.levelMultiplier);
+
+				this.bunnyGirlData.discount = await bunnyGirlLootBox3.methods.discount().call();
 				
-				const mintFee = await bunnyGirlContract.methods.mintFee('0x0000000000000000000000000000000000000000').call();
-				console.log('mintFee: ', mintFee);
-				this.bunnyGirlData.mintFee = mintFee;
 			}catch(err){
 				console.error(err);
 			}
+
+			this.bunnyGirlNftTokenV2 = new web3.eth.Contract(this.$settings.BunnyGirlNftTokenV2Abi, this.$settings.BunnyGirlNftTokenV2Address);
 		},
 
 		async isEnoughFunds(fee){
+			const bunnyGirlNftTokenV2 = this.bunnyGirlNftTokenV2;
 			const web3 = this.web3;
 			const BN = web3.utils.BN;
 			let userBalance = new BN('0');
@@ -204,6 +238,9 @@ export default {
 				userBalance = new BN(await web3.eth.getBalance(this.accounts[0]));
 				this.userBalanceText = userBalance.toString();
 				//this.userBalanceText = web3.utils.fromWei(userBalance, 'ether');
+			}else{
+				userBalance = new BN(await bunnyGirlNftTokenV2.methods.balanceOf(this.accounts[0]).call());
+				this.userBalanceText = userBalance.toString();
 			}
 			console.log(userBalance.toString());
 			//small amount of wei as margin
@@ -334,17 +371,28 @@ export default {
 
 		},
 
-		/*async approvePurchase(){
+		async approveErc20Spending(){
 			const web3 = this.web3;
-			const bunnyGirlContract = this.bunnyGirlContract;
+			const BN = web3.utils.BN;
+			const bunnyGirlNftTokenV2 = this.bunnyGirlNftTokenV2;
 			const fee = this.calculateFee();
 
-			bunnyGirlContract.methods.approve(this.$settings.BunnyGirlNftAddress, fee).
+			const allowance = new BN(await bunnyGirlNftTokenV2.methods.allowance(this.accounts[0], this.$settings.BunnyGirlLootBox3Address).call());
+			if(!allowance.eq(new BN('0'))){
+				if(allowance.gte(fee)){
+					this.isErc20Approved = true;
+					alert('Fees are approved, you may proceed to buy');
+					return;
+				}
+			}
+
+			bunnyGirlNftTokenV2.methods.approve(this.$settings.BunnyGirlLootBox3Address, fee).
 			send({from: this.accounts[0]})
 			.on('transactionHash', (hash)=>{
 				//display tx url for user to check
 			}).on('receipt', (receipt)=>{
 				alert('Approve Success');
+				this.isErc20Approved = true;
 				console.log(receipt);
 			}).on('error', (err, receipt)=>{
 				if(err.hasOwnProperty('code')){
@@ -354,10 +402,9 @@ export default {
 					}
 				}
 				alert('Approve Failed, Please Try Again');
-				console.error(err);
-				console.error(receipt);
+				console.error(err, receipt);
 			});
-		},*/
+		},
 	},
 	//
 	async mounted(){
